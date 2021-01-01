@@ -36,12 +36,12 @@ public class PatchMethod31382
         }
         else
         {
-            LOGGER.info("Access Token: " + accessToken);
             final SocialInteractionsService[] socialService = new SocialInteractionsService[] { new OfflineSocialInteractions() };
             Thread socialThread = new Thread() {
                 public void run() {
                     try {
                         socialService[0] = yggdrasilAuthenticationService.createSocialInteractionsService(accessToken);
+                        LOGGER.info("Verified Authentication Successfully");
                     } catch (AuthenticationException ex) {
                         LOGGER.error("Failed to verify authentication", (Throwable)ex);
                         socialService[0] = new OfflineSocialInteractions();
