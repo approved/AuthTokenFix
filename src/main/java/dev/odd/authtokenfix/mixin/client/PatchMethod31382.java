@@ -1,9 +1,12 @@
 package dev.odd.authtokenfix.mixin.client;
 
+import java.lang.reflect.Field;
+
 import com.mojang.authlib.exceptions.AuthenticationException;
 import com.mojang.authlib.minecraft.OfflineSocialInteractions;
 import com.mojang.authlib.minecraft.SocialInteractionsService;
 import com.mojang.authlib.yggdrasil.YggdrasilAuthenticationService;
+import com.mojang.authlib.yggdrasil.YggdrasilSocialInteractionsService;
 
 import org.apache.logging.log4j.Logger;
 import org.spongepowered.asm.mixin.Final;
@@ -15,6 +18,8 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.RunArgs;
+import net.minecraft.client.network.SocialInteractionsManager;
+import net.minecraft.util.Util;
 
 @Mixin(MinecraftClient.class)
 public class PatchMethod31382
@@ -27,33 +32,49 @@ public class PatchMethod31382
     public void onMethod31382(YggdrasilAuthenticationService yggdrasilAuthenticationService, RunArgs runArgs, CallbackInfoReturnable<SocialInteractionsService> cir)
     {
         String accessToken = runArgs.network.session.getAccessToken();
-        if(accessToken == null || accessToken.isEmpty() || accessToken.equals("FabricMC"))
+        
+        if (!runArgs.autoConnect.serverAddress.isBlank())
         {
-            LOGGER.info("Setting Social Interactions Offline");
-            cir.setReturnValue(new OfflineSocialInteractions());
-            cir.cancel();
-            return;
+            try {
+                cir.setReturnValue(yggdrasilAuthenticationService.createSocialInteractionsService(accessToken));
+            } catch (AuthenticationException ex) {
+                LOGGER.error("Failed to verify authentication", ex);
+            }
+        }
+        else if(accessToken.isBlank() || accessToken.equals("FabricMC"))
+        {
+            LOGGER.info("Social Interactions: Offline");
         }
         else
         {
-            final SocialInteractionsService[] socialService = new SocialInteractionsService[] { new OfflineSocialInteractions() };
-            Thread socialThread = new Thread() {
+            LOGGER.info("Assigning Main Worker to Create Social Interactions Service");
+            Util.getMainWorkerExecutor().execute(new Runnable() {
                 public void run() {
                     try {
-                        socialService[0] = yggdrasilAuthenticationService.createSocialInteractionsService(accessToken);
-                        LOGGER.info("Verified Authentication Successfully");
-                    } catch (AuthenticationException ex) {
-                        LOGGER.error("Failed to verify authentication", (Throwable)ex);
-                        socialService[0] = new OfflineSocialInteractions();
-                    }
-                }  
-            };
-            
-            socialThread.start();
+                        YggdrasilSocialInteractionsService socialService = yggdrasilAuthenticationService.createSocialInteractionsService(accessToken);
 
-            cir.setReturnValue(socialService[0]);
-            cir.cancel();
-            return;
+                        if (socialService != null)
+                        {
+                            MinecraftClient client = MinecraftClient.getInstance();
+                            Field socialField = MinecraftClient.class.getDeclaredField("field_26902");
+                            socialField.setAccessible(true);
+                            socialField.set(client, socialService);
+
+                            Field socialInteractionsField = MinecraftClient.class.getDeclaredField("field_26842");
+                            socialInteractionsField.setAccessible(true);
+                            socialInteractionsField.set(client, new SocialInteractionsManager(client, socialService));
+
+                            LOGGER.info("Social Interactions: Online");
+                        }
+                    } catch (Exception ex) {
+                        LOGGER.error("Failed to verify authentication", ex);
+                    }
+                }
+            });
         }
+
+        cir.setReturnValue(new OfflineSocialInteractions());
+        cir.cancel();
+        return;
     }
 }
